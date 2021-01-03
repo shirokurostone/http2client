@@ -24,13 +24,14 @@ func DecodeInteger(data []byte, n int) int {
 		return int(v)
 	}
 
+	v = 0
 	j := 1
 	m := 0
-	for data[j]&0x80 == 0x80 {
+	for ; data[j]&0x80 == 0x80; j++ {
 		v = v | (int(data[j]&0x7f) << m)
 		m += 7
 	}
-	return v | (int(data[j]&0x7f) << m)
+	return v | (int(data[j]&0x7f) << m) + i
 }
 
 func EncodeHuffmanCode(str string, eos bool) []byte {
