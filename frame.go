@@ -258,9 +258,127 @@ type HeadersFrame struct {
 	Payload HeadersPayload
 }
 
+type PriorityPayload struct {
+	E                byte
+	StreamDependency uint32
+	Weight           byte
+}
+
+func (p *PriorityPayload) Serialize() []byte {
+	var output [5]byte
+
+	binary.BigEndian.PutUint32(output[0:4], p.StreamDependency)
+	output[0] = output[0]&0x7f | ((p.E & 0x01) << 7)
+
+	output[4] = p.Weight
+
+	return output[:]
+}
+
+func (p *PriorityPayload) Deserialize(input []byte) error {
+	var tmp uint32
+	tmp = binary.BigEndian.Uint32(input[0:4])
+
+	p.E = byte((tmp >> 31) & 0x01)
+	p.StreamDependency = tmp & 0x7fffffff
+
+	p.Weight = input[4]
+
+	return nil
+
+}
+
+func (p *PriorityPayload) Size() int {
+	return 5
+}
+
+type PriorityFrame struct {
+	FrameBase
+	Payload PriorityPayload
+}
+
+type RstStreamPayload struct {
+	ErrorCode uint32
+}
+
+func (p *RstStreamPayload) Serialize() []byte {
+	var output [4]byte
+	binary.BigEndian.PutUint32(output[0:4], p.ErrorCode)
+	return output[:]
+}
+
+func (p *RstStreamPayload) Deserialize(input []byte) error {
+	p.ErrorCode = binary.BigEndian.Uint32(input[0:4])
+	return nil
+}
+
+func (p *RstStreamPayload) Size() int {
+	return 4
+}
+
+type RstStreamFrame struct {
+	FrameBase
+	Payload RstStreamPayload
+}
+
 type SettingsFrame struct {
 	FrameBase
 	Payload []SettingsPayload
+}
+
+type PushPromisePayload struct {
+	PromisedStreamID    uint32
+	HeaderBlockFragment []byte
+}
+
+func (p *PushPromisePayload) Serialize() []byte {
+	output := make([]byte, len(p.HeaderBlockFragment)+4)
+
+	binary.BigEndian.PutUint32(output[0:4], p.PromisedStreamID)
+	copy(output[4:], p.HeaderBlockFragment)
+	return output
+}
+
+func (p *PushPromisePayload) Deserialize(input []byte, padded bool) error {
+	i := 0
+	var padLength byte = 0
+	if padded {
+		padLength = input[i]
+		i++
+	}
+
+	p.PromisedStreamID = binary.BigEndian.Uint32(input[i:i+4]) & 0x7fffffff
+	p.HeaderBlockFragment = input[i : len(input)-i-int(padLength)]
+	return nil
+}
+
+type PushPromiseFrame struct {
+	FrameBase
+	Payload PushPromisePayload
+}
+
+type PingPayload struct {
+	OpaqueData [8]byte
+}
+
+func (p *PingPayload) Serialize() []byte {
+	output := make([]byte, len(p.OpaqueData))
+	copy(output[0:], p.OpaqueData[:])
+	return output
+}
+
+func (p *PingPayload) Deserialize(input []byte) error {
+	copy(p.OpaqueData[:], input[0:len(p.OpaqueData)])
+	return nil
+}
+
+func (p *PingPayload) Size() int {
+	return 8
+}
+
+type PingFrame struct {
+	FrameBase
+	Payload PingPayload
 }
 
 type GoawayFrame struct {
@@ -271,6 +389,26 @@ type GoawayFrame struct {
 type WindowUpdateFrame struct {
 	FrameBase
 	Payload WindowUpdatePayload
+}
+
+type ContinuationPayload struct {
+	HeaderBlockFragment []byte
+}
+
+func (p *ContinuationPayload) Serialize() []byte {
+	output := make([]byte, len(p.HeaderBlockFragment))
+	copy(output[4:], p.HeaderBlockFragment)
+	return output
+}
+
+func (p *ContinuationPayload) Deserialize(input []byte) error {
+	p.HeaderBlockFragment = input[:]
+	return nil
+}
+
+type ContinuationFrame struct {
+	FrameBase
+	Payload ContinuationPayload
 }
 
 type UnknownFrame struct {
@@ -317,6 +455,36 @@ func ReadFrame(reader io.Reader) (Frame, error) {
 		}
 		return &frame, nil
 
+	case PRIORITY:
+		var frame PriorityFrame
+		frame.Header = header
+
+		buf := make([]byte, header.Length)
+		_, err := io.ReadFull(reader, buf[:])
+		if err != nil {
+			return nil, err
+		}
+
+		if err := frame.Payload.Deserialize(buf[:]); err != nil {
+			return nil, err
+		}
+		return &frame, nil
+
+	case RST_STREAM:
+		var frame RstStreamFrame
+		frame.Header = header
+
+		buf := make([]byte, header.Length)
+		_, err := io.ReadFull(reader, buf[:])
+		if err != nil {
+			return nil, err
+		}
+
+		if err := frame.Payload.Deserialize(buf[:]); err != nil {
+			return nil, err
+		}
+		return &frame, nil
+
 	case SETTINGS:
 		var frame SettingsFrame
 		frame.Header = header
@@ -331,6 +499,37 @@ func ReadFrame(reader io.Reader) (Frame, error) {
 			frame.Payload = append(frame.Payload, payload)
 		}
 		return &frame, nil
+
+	case PUSH_PROMISE:
+		var frame PushPromiseFrame
+		frame.Header = header
+
+		buf := make([]byte, header.Length)
+		_, err := io.ReadFull(reader, buf[:])
+		if err != nil {
+			return nil, err
+		}
+
+		if err := frame.Payload.Deserialize(buf[:], header.Flags&PADDED != 0); err != nil {
+			return nil, err
+		}
+		return &frame, nil
+
+	case PING:
+		var frame PingFrame
+		frame.Header = header
+
+		buf := make([]byte, header.Length)
+		_, err := io.ReadFull(reader, buf[:])
+		if err != nil {
+			return nil, err
+		}
+
+		if err := frame.Payload.Deserialize(buf[:]); err != nil {
+			return nil, err
+		}
+		return &frame, nil
+
 	case GOAWAY:
 		var frame GoawayFrame
 		frame.Header = header
@@ -355,6 +554,21 @@ func ReadFrame(reader io.Reader) (Frame, error) {
 			return nil, err
 		}
 
+		return &frame, nil
+
+	case CONTINUATION:
+		var frame ContinuationFrame
+		frame.Header = header
+
+		buf := make([]byte, header.Length)
+		_, err := io.ReadFull(reader, buf[:])
+		if err != nil {
+			return nil, err
+		}
+
+		if err := frame.Payload.Deserialize(buf[:]); err != nil {
+			return nil, err
+		}
 		return &frame, nil
 
 	default:
