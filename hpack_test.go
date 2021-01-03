@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/hex"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -88,5 +89,39 @@ func TestDecodeHuffmanCode(t *testing.T) {
 		assert.Nil(t, err)
 		actual := DecodeHuffmanCode(input)
 		assert.Equal(t, c.expected, actual)
+	}
+}
+
+func TestEncodeHeaders(t *testing.T) {
+	testcases := []struct {
+		input    HeaderList
+		expected string
+	}{
+		{
+			HeaderList{
+				{":method", "GET"},
+			},
+			"82",
+		},
+		{
+			HeaderList{
+				{":method", "PATCH"},
+			},
+			"02 05 50 41 54 43 48",
+		},
+		{
+			HeaderList{
+				{"custom-key", "custom-value"},
+			},
+			"00 0a 637573746f6d2d6b6579 0c 637573746f6d2d76616c7565",
+		},
+	}
+
+	for i := 0; i < len(testcases); i++ {
+		c := testcases[i]
+		expected, err := hex.DecodeString(strings.ReplaceAll(c.expected, " ", ""))
+		assert.Nil(t, err)
+		actual := EncodeHeaders(c.input)
+		assert.Equal(t, expected, actual)
 	}
 }

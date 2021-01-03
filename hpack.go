@@ -1,5 +1,10 @@
 package main
 
+import (
+	"errors"
+	"strings"
+)
+
 func EncodeInteger(value int, n int) []byte {
 	i := (1 << n) - 1
 	if value < i {
@@ -15,13 +20,13 @@ func EncodeInteger(value int, n int) []byte {
 	return result
 }
 
-func DecodeInteger(data []byte, n int) int {
+func DecodeInteger(data []byte, n int) (int, int) {
 	var v int
 
 	i := (1 << n) - 1
 	v = int(data[0] & byte(i))
 	if v < i {
-		return int(v)
+		return int(v), 1
 	}
 
 	v = 0
@@ -31,7 +36,7 @@ func DecodeInteger(data []byte, n int) int {
 		v = v | (int(data[j]&0x7f) << m)
 		m += 7
 	}
-	return v | (int(data[j]&0x7f) << m) + i
+	return v | (int(data[j]&0x7f) << m) + i, j
 }
 
 func EncodeHuffmanCode(str string, eos bool) []byte {
@@ -92,26 +97,170 @@ func DecodeHuffmanCode(data []byte) string {
 	return string(result)
 }
 
-func EncodeHeaders(hl HeaderList) []byte {
-	result := []byte{}
+func EncodeHeaders(hl HeaderList) ([]byte, error) {
+	result := make([]byte, 0)
 
 	for i := 0; i < len(hl); i++ {
 		h := hl[i]
 		match := false
 		for j := 1; j < len(StaticTable); j++ {
-			if h.Name == StaticTable[j].Name {
-				if h.Value == StaticTable[j].Value {
-					// Indexed Header Field Representation
-					d := EncodeInteger(j, 7)
-					d[0] = 0x80 | d[0]
-					result = append(result, d...)
+			if strings.Compare(h.Name, StaticTable[j].Name) == 0 {
+				if strings.Compare(h.Value, StaticTable[j].Value) == 0 {
+					result = append(result, h.DumpIndexedHeaderField(j)...)
 					match = true
+					break
 				}
 			}
 		}
 		if match {
 			continue
 		}
+		for j := 1; j < len(StaticTable); j++ {
+			if strings.Compare(h.Name, StaticTable[j].Name) == 0 {
+				d, err := h.DumpLiteralHeaderFieldWithIndexedName(j, WITHOUT_INDEXING)
+				if err != nil {
+					return nil, err
+				}
+				result = append(result, d...)
+				match = true
+				break
+			}
+		}
+		if match {
+			continue
+		}
+
+		d, err := h.DumpLiteralHeaderFieldWithNewdName(WITHOUT_INDEXING)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, d...)
+		match = true
+
+	}
+	return result, nil
+}
+
+func parseIndexedName(index int, input []byte) (HeaderField, int) {
+	i := 0
+	valueLength, j := DecodeInteger(input[i:], 7)
+	h := input[i]&0x80 == 0x80
+	i += j
+	var value string
+	if h {
+		value = DecodeHuffmanCode(input[i : i+valueLength])
+
+	} else {
+		value = string(input[i : i+valueLength])
+	}
+	i += valueLength
+	return HeaderField{StaticTable[index].Name, value}, i
+}
+
+func parseNewName(input []byte) (HeaderField, int) {
+	i := 0
+	nameLength, j := DecodeInteger(input[i:], 7)
+	h1 := input[i]&0x80 == 0x80
+	i += j
+	var name string
+	if h1 {
+		name = DecodeHuffmanCode(input[i : i+nameLength])
+
+	} else {
+		name = string(input[i : i+nameLength])
+	}
+	i += nameLength
+
+	valueLength, j := DecodeInteger(input[i:], 7)
+
+	h2 := input[i]&0x80 == 0x80
+	i += j
+	var value string
+	if h2 {
+		value = DecodeHuffmanCode(input[i : i+valueLength])
+
+	} else {
+		value = string(input[i : i+valueLength])
+	}
+	i += valueLength
+
+	return HeaderField{name, value}, i
+}
+
+func ParseHeaderField(input []byte) HeaderList {
+	var result HeaderList
+
+	for i := 0; i < len(input); {
+
+		b := input[i]
+
+		switch {
+		case b&0x80 == 0x80:
+			// Indexed Header Field
+			index, j := DecodeInteger(input[i:], 7)
+			result = append(result, StaticTable[index])
+			i += j
+			break
+		case b&0xc0 == 0x40:
+			// Literal Header Field with Incremental Indexing
+			if b == 0x40 {
+				// New Name
+				i++
+				f, j := parseNewName(input[i:])
+				result = append(result, f)
+				i += j
+			} else {
+				// Indexed Name
+				index, k := DecodeInteger(input[i:], 6)
+				i += k
+				f, j := parseIndexedName(index, input[i:])
+				result = append(result, f)
+				i += j
+			}
+			break
+		case b&0xf0 == 0x00:
+			// Literal Header Field without Indexing
+			if b == 0x00 {
+				// New Name
+				i++
+				f, j := parseNewName(input[i:])
+				result = append(result, f)
+				i += j
+			} else {
+				// Indexed Name
+				index, k := DecodeInteger(input[i:], 4)
+				i += k
+				f, j := parseIndexedName(index, input[i:])
+				result = append(result, f)
+				i += j
+			}
+			break
+		case b&0xf0 == 0x10:
+			// Literal Header Field Never Indexed
+			if b == 0x10 {
+				// New Name
+				i++
+				f, j := parseNewName(input[i:])
+				result = append(result, f)
+				i += j
+			} else {
+				// Indexed Name
+				index, k := DecodeInteger(input[i:], 4)
+				i += k
+				f, j := parseIndexedName(index, input[i:])
+				result = append(result, f)
+				i += j
+			}
+			break
+		case b&0xe0 == 0x20:
+			// Maximum Dynamic Table Size Change
+			i++
+			break
+		default:
+			// TODO: parse error
+			break
+		}
+
 	}
 	return result
 }
@@ -119,6 +268,72 @@ func EncodeHeaders(hl HeaderList) []byte {
 type HeaderField struct {
 	Name  string
 	Value string
+}
+
+func (h *HeaderField) DumpIndexedHeaderField(index int) []byte {
+	d := EncodeInteger(index, 7)
+	d[0] |= 0x80
+	return d
+}
+
+type indexingType byte
+
+const (
+	INCREMENTAL_INDEXING indexingType = iota + 1
+	WITHOUT_INDEXING
+	NEVER_INDEXING
+)
+
+func (h *HeaderField) DumpLiteralHeaderFieldWithIndexedName(index int, indexingType indexingType) ([]byte, error) {
+	var result []byte
+	switch indexingType {
+	case INCREMENTAL_INDEXING:
+		result = EncodeInteger(index, 6)
+		result[0] |= 0x40
+		break
+	case WITHOUT_INDEXING:
+		result = EncodeInteger(index, 4)
+		break
+	case NEVER_INDEXING:
+		result = EncodeInteger(index, 4)
+		result[0] |= 0x10
+		break
+	default:
+		return nil, errIllegalArgument
+	}
+
+	d := EncodeInteger(len(h.Value), 7)
+	result = append(result, d...)
+	result = append(result, h.Value...)
+
+	return result, nil
+}
+
+var errIllegalArgument = errors.New("IllegalArgument")
+
+func (h *HeaderField) DumpLiteralHeaderFieldWithNewdName(indexingType indexingType) ([]byte, error) {
+	var result []byte
+	switch indexingType {
+	case INCREMENTAL_INDEXING:
+		result = []byte{0x40}
+		break
+	case WITHOUT_INDEXING:
+		result = []byte{0x00}
+		break
+	case NEVER_INDEXING:
+		result = []byte{0x10}
+		break
+	default:
+		return nil, errIllegalArgument
+	}
+
+	result = append(result, EncodeInteger(len(h.Name), 7)...)
+	result = append(result, h.Name...)
+
+	result = append(result, EncodeInteger(len(h.Value), 7)...)
+	result = append(result, h.Value...)
+
+	return result, nil
 }
 
 type HeaderList []HeaderField

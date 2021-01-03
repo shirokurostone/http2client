@@ -5,6 +5,8 @@ import (
 	"io"
 )
 
+const HTTP2CoccectionPreface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+
 type FrameType uint8
 
 const (
@@ -23,13 +25,17 @@ const (
 type Flags uint8
 
 const (
-	ACK Flags = 0x01
+	ACK            Flags = 0x01
+	END_STREAM     Flags = 0x01
+	END_HEADERS    Flags = 0x04
+	PADDED         Flags = 0x08
+	FLAGS_PRIORITY Flags = 0x20
 )
 
 type FrameHeader struct {
 	Length           uint32
 	Type             FrameType
-	Flags            byte
+	Flags            Flags
 	StreamIdentifier uint32
 }
 
@@ -40,7 +46,7 @@ func (h *FrameHeader) Serialize() []byte {
 	binary.BigEndian.PutUint32(tmp[:], h.Length)
 	copy(output[0:3], tmp[1:4])
 	output[3] = byte(h.Type)
-	output[4] = h.Flags
+	output[4] = byte(h.Flags)
 	binary.BigEndian.PutUint32(output[5:9], h.StreamIdentifier&0x7fffffff)
 	return output[:]
 }
@@ -53,7 +59,7 @@ func (h *FrameHeader) Deserialize(input []byte) error {
 
 	h.Length = binary.BigEndian.Uint32(tmp[:])
 	h.Type = FrameType(input[3])
-	h.Flags = input[4]
+	h.Flags = Flags(input[4])
 	h.StreamIdentifier = binary.BigEndian.Uint32(input[5:9]) & 0x7fffffff
 
 	return nil
@@ -90,7 +96,7 @@ func (p *SettingsPayload) Size() int {
 	return 6
 }
 
-type HeaderPayload struct {
+type HeadersPayload struct {
 	PadLength           byte
 	E                   byte
 	StreamDependency    uint32
@@ -98,14 +104,13 @@ type HeaderPayload struct {
 	HeaderBlockFragment []byte
 }
 
-func (h *HeaderPayload) Serialize() []byte {
-	output := make([]byte, len(h.HeaderBlockFragment)+4)
-	binary.BigEndian.PutUint32(output[0:4], uint32(h.E&0x01<<31)|h.StreamDependency)
-	copy(output[4:], h.HeaderBlockFragment)
+func (h *HeadersPayload) Serialize() []byte {
+	output := make([]byte, len(h.HeaderBlockFragment))
+	copy(output[0:], h.HeaderBlockFragment)
 	return output
 }
 
-func (h *HeaderPayload) Deserialize(input []byte, padded bool, priority bool) error {
+func (h *HeadersPayload) Deserialize(input []byte, padded bool, priority bool) error {
 	i := 0
 	if padded {
 		h.PadLength = input[i]
@@ -114,17 +119,87 @@ func (h *HeaderPayload) Deserialize(input []byte, padded bool, priority bool) er
 		h.PadLength = 0
 	}
 
-	tmp := binary.BigEndian.Uint32(input[i : i+4])
-	h.StreamDependency = tmp & 0x7fffffff
-	h.E = byte((tmp >> 31) & 0x01)
-	i += 4
-
 	if priority {
+		tmp := binary.BigEndian.Uint32(input[i : i+4])
+		h.StreamDependency = tmp & 0x7fffffff
+		h.E = byte((tmp >> 31) & 0x01)
+		i += 4
+
 		h.Weight = input[i]
 		i++
 	}
 
 	h.HeaderBlockFragment = input[i : len(input)-i-int(h.PadLength)]
+	return nil
+}
+
+type GoawayPayload struct {
+	LastStreamID        uint32
+	ErrorCode           uint32
+	AdditionalDebugData []byte
+}
+
+func (p *GoawayPayload) Deserialize(input []byte) error {
+
+	tmp := binary.BigEndian.Uint32(input[0:4])
+	p.LastStreamID = tmp & 0x7fffffff
+
+	tmp = binary.BigEndian.Uint32(input[4:8])
+	p.ErrorCode = tmp
+
+	p.AdditionalDebugData = input[8:]
+
+	return nil
+}
+
+type ErrorCode uint32
+
+const (
+	NO_ERROR            ErrorCode = 0x00
+	PROTOCOL_ERROR      ErrorCode = 0x01
+	INTERNAL_ERROR      ErrorCode = 0x02
+	FLOW_CONTROL_ERROR  ErrorCode = 0x03
+	SETTINGS_TIMEOUT    ErrorCode = 0x04
+	STREAM_CLOSED       ErrorCode = 0x05
+	FRAME_SIZE_ERROR    ErrorCode = 0x06
+	REFUSED_STREAM      ErrorCode = 0x07
+	CANCEL              ErrorCode = 0x08
+	COMPRESSION_ERROR   ErrorCode = 0x09
+	CONNECT_ERROR       ErrorCode = 0x0a
+	ENHANCE_YOUR_CALM   ErrorCode = 0x0b
+	INADEQUATE_SECURITY ErrorCode = 0x0c
+	HTTP_1_1_REQUIRED   ErrorCode = 0x0d
+)
+
+type WindowUpdatePayload struct {
+	WindowSizeIncrement uint32
+}
+
+func (p *WindowUpdatePayload) Size() int {
+	return 4
+}
+func (p *WindowUpdatePayload) Serialize() []byte {
+	var output [4]byte
+	binary.BigEndian.PutUint32(output[0:4], p.WindowSizeIncrement&0x7fffffff)
+	return output[:]
+}
+
+func (p *WindowUpdatePayload) Deserialize(input []byte) error {
+	tmp := binary.BigEndian.Uint32(input[0:4])
+	p.WindowSizeIncrement = tmp & 0x7fffffff
+	return nil
+}
+
+type DataPayload struct {
+	Data []byte
+}
+
+func (p *DataPayload) Serialize() []byte {
+	return p.Data
+}
+
+func (p *DataPayload) Deserialize(input []byte) error {
+	p.Data = input
 	return nil
 }
 
@@ -162,7 +237,7 @@ func WriteTo(w io.Writer, s FixedLengthSerializable) (int64, error) {
 }
 
 type Frame interface {
-	GetType() FrameType
+	// GetType() FrameType
 }
 
 type FrameBase struct {
@@ -173,9 +248,29 @@ func (f *FrameBase) GetType() FrameType {
 	return f.Header.Type
 }
 
+type DataFrame struct {
+	FrameBase
+	Payload DataPayload
+}
+
+type HeadersFrame struct {
+	FrameBase
+	Payload HeadersPayload
+}
+
 type SettingsFrame struct {
 	FrameBase
 	Payload []SettingsPayload
+}
+
+type GoawayFrame struct {
+	FrameBase
+	Payload GoawayPayload
+}
+
+type WindowUpdateFrame struct {
+	FrameBase
+	Payload WindowUpdatePayload
 }
 
 type UnknownFrame struct {
@@ -192,6 +287,36 @@ func ReadFrame(reader io.Reader) (Frame, error) {
 	}
 
 	switch header.Type {
+	case DATA:
+		var frame DataFrame
+		frame.Header = header
+
+		buf := make([]byte, header.Length)
+		_, err := io.ReadFull(reader, buf[:])
+		if err != nil {
+			return nil, err
+		}
+
+		if err := frame.Payload.Deserialize(buf[:]); err != nil {
+			return nil, err
+		}
+		return &frame, nil
+
+	case HEADERS:
+		var frame HeadersFrame
+		frame.Header = header
+
+		buf := make([]byte, header.Length)
+		_, err := io.ReadFull(reader, buf[:])
+		if err != nil {
+			return nil, err
+		}
+
+		if err := frame.Payload.Deserialize(buf[:], header.Flags&PADDED != 0, header.Flags&FLAGS_PRIORITY != 0); err != nil {
+			return nil, err
+		}
+		return &frame, nil
+
 	case SETTINGS:
 		var frame SettingsFrame
 		frame.Header = header
@@ -206,6 +331,32 @@ func ReadFrame(reader io.Reader) (Frame, error) {
 			frame.Payload = append(frame.Payload, payload)
 		}
 		return &frame, nil
+	case GOAWAY:
+		var frame GoawayFrame
+		frame.Header = header
+
+		buf := make([]byte, header.Length)
+		_, err := io.ReadFull(reader, buf[:])
+		if err != nil {
+			return nil, err
+		}
+
+		if err := frame.Payload.Deserialize(buf[:]); err != nil {
+			return nil, err
+		}
+		return &frame, nil
+
+	case WINDOW_UPDATE:
+		var frame WindowUpdateFrame
+		frame.Header = header
+
+		_, err := ReadFrom(reader, &frame.Payload)
+		if err != nil {
+			return nil, err
+		}
+
+		return &frame, nil
+
 	default:
 		var frame UnknownFrame
 		frame.Header = header
