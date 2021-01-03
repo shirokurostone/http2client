@@ -32,6 +32,10 @@ const (
 	FLAGS_PRIORITY Flags = 0x20
 )
 
+func (self Flags) Has(f Flags) bool {
+	return self&f == f
+}
+
 type FrameHeader struct {
 	Length           uint32
 	Type             FrameType
@@ -424,18 +428,17 @@ func ReadFrame(reader io.Reader) (Frame, error) {
 		return nil, err
 	}
 
+	buf := make([]byte, header.Length)
+	if _, err := io.ReadFull(reader, buf); err != nil {
+		return nil, err
+	}
+
 	switch header.Type {
 	case DATA:
 		var frame DataFrame
 		frame.Header = header
 
-		buf := make([]byte, header.Length)
-		_, err := io.ReadFull(reader, buf[:])
-		if err != nil {
-			return nil, err
-		}
-
-		if err := frame.Payload.Deserialize(buf[:]); err != nil {
+		if err := frame.Payload.Deserialize(buf); err != nil {
 			return nil, err
 		}
 		return &frame, nil
@@ -444,13 +447,7 @@ func ReadFrame(reader io.Reader) (Frame, error) {
 		var frame HeadersFrame
 		frame.Header = header
 
-		buf := make([]byte, header.Length)
-		_, err := io.ReadFull(reader, buf[:])
-		if err != nil {
-			return nil, err
-		}
-
-		if err := frame.Payload.Deserialize(buf[:], header.Flags&PADDED != 0, header.Flags&FLAGS_PRIORITY != 0); err != nil {
+		if err := frame.Payload.Deserialize(buf, header.Flags.Has(PADDED), header.Flags.Has(FLAGS_PRIORITY)); err != nil {
 			return nil, err
 		}
 		return &frame, nil
@@ -459,13 +456,7 @@ func ReadFrame(reader io.Reader) (Frame, error) {
 		var frame PriorityFrame
 		frame.Header = header
 
-		buf := make([]byte, header.Length)
-		_, err := io.ReadFull(reader, buf[:])
-		if err != nil {
-			return nil, err
-		}
-
-		if err := frame.Payload.Deserialize(buf[:]); err != nil {
+		if err := frame.Payload.Deserialize(buf); err != nil {
 			return nil, err
 		}
 		return &frame, nil
@@ -474,13 +465,7 @@ func ReadFrame(reader io.Reader) (Frame, error) {
 		var frame RstStreamFrame
 		frame.Header = header
 
-		buf := make([]byte, header.Length)
-		_, err := io.ReadFull(reader, buf[:])
-		if err != nil {
-			return nil, err
-		}
-
-		if err := frame.Payload.Deserialize(buf[:]); err != nil {
+		if err := frame.Payload.Deserialize(buf); err != nil {
 			return nil, err
 		}
 		return &frame, nil
@@ -489,28 +474,20 @@ func ReadFrame(reader io.Reader) (Frame, error) {
 		var frame SettingsFrame
 		frame.Header = header
 
-		var p SettingsPayload
-		for i := 0; i < int(frame.Header.Length)/p.Size(); i++ {
-			var payload SettingsPayload
-			_, err := ReadFrom(reader, &payload)
-			if err != nil {
-				return nil, err
-			}
-			frame.Payload = append(frame.Payload, payload)
+		for i := 0; i < int(frame.Header.Length); {
+			var p SettingsPayload
+			p.Deserialize(buf[i : i+p.Size()])
+			frame.Payload = append(frame.Payload, p)
+			i += p.Size()
 		}
+
 		return &frame, nil
 
 	case PUSH_PROMISE:
 		var frame PushPromiseFrame
 		frame.Header = header
 
-		buf := make([]byte, header.Length)
-		_, err := io.ReadFull(reader, buf[:])
-		if err != nil {
-			return nil, err
-		}
-
-		if err := frame.Payload.Deserialize(buf[:], header.Flags&PADDED != 0); err != nil {
+		if err := frame.Payload.Deserialize(buf, header.Flags.Has(PADDED)); err != nil {
 			return nil, err
 		}
 		return &frame, nil
@@ -519,13 +496,7 @@ func ReadFrame(reader io.Reader) (Frame, error) {
 		var frame PingFrame
 		frame.Header = header
 
-		buf := make([]byte, header.Length)
-		_, err := io.ReadFull(reader, buf[:])
-		if err != nil {
-			return nil, err
-		}
-
-		if err := frame.Payload.Deserialize(buf[:]); err != nil {
+		if err := frame.Payload.Deserialize(buf); err != nil {
 			return nil, err
 		}
 		return &frame, nil
@@ -534,13 +505,7 @@ func ReadFrame(reader io.Reader) (Frame, error) {
 		var frame GoawayFrame
 		frame.Header = header
 
-		buf := make([]byte, header.Length)
-		_, err := io.ReadFull(reader, buf[:])
-		if err != nil {
-			return nil, err
-		}
-
-		if err := frame.Payload.Deserialize(buf[:]); err != nil {
+		if err := frame.Payload.Deserialize(buf); err != nil {
 			return nil, err
 		}
 		return &frame, nil
@@ -549,24 +514,16 @@ func ReadFrame(reader io.Reader) (Frame, error) {
 		var frame WindowUpdateFrame
 		frame.Header = header
 
-		_, err := ReadFrom(reader, &frame.Payload)
-		if err != nil {
+		if err := frame.Payload.Deserialize(buf); err != nil {
 			return nil, err
 		}
-
 		return &frame, nil
 
 	case CONTINUATION:
 		var frame ContinuationFrame
 		frame.Header = header
 
-		buf := make([]byte, header.Length)
-		_, err := io.ReadFull(reader, buf[:])
-		if err != nil {
-			return nil, err
-		}
-
-		if err := frame.Payload.Deserialize(buf[:]); err != nil {
+		if err := frame.Payload.Deserialize(buf); err != nil {
 			return nil, err
 		}
 		return &frame, nil
@@ -574,11 +531,7 @@ func ReadFrame(reader io.Reader) (Frame, error) {
 	default:
 		var frame UnknownFrame
 		frame.Header = header
-		frame.Payload = make([]byte, frame.Header.Length)
-		_, err := io.ReadFull(reader, frame.Payload)
-		if err != nil {
-			return nil, err
-		}
+		frame.Payload = buf
 
 		return &frame, nil
 	}
