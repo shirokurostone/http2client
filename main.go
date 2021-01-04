@@ -2,10 +2,10 @@ package main
 
 import (
 	"bufio"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"log"
-	"net"
 )
 
 func recvFrame(reader io.Reader) Frame {
@@ -18,7 +18,11 @@ func recvFrame(reader io.Reader) Frame {
 }
 
 func main() {
-	conn, err := net.Dial("tcp", ":8080")
+	conn, err := tls.Dial("tcp", ":8443", &tls.Config{
+		NextProtos:         []string{"h2"},
+		InsecureSkipVerify: true,
+	})
+	// conn, err := net.Dial("tcp", ":8080")
 	if err != nil {
 		log.Fatal(err)
 	}
