@@ -73,12 +73,16 @@ func (h *FrameHeader) Size() int {
 	return 9
 }
 
-type SettingsPayload struct {
+type SettingsParameter struct {
 	Identifier uint16
 	Value      uint32
 }
 
-func (p *SettingsPayload) Serialize() []byte {
+type SettingsPayload struct {
+	Parameters []SettingsParameter
+}
+
+func (p *SettingsParameter) Serialize() []byte {
 	var output [6]byte
 	var tmp [4]byte
 
@@ -90,14 +94,36 @@ func (p *SettingsPayload) Serialize() []byte {
 	return output[:]
 }
 
-func (p *SettingsPayload) Deserialize(input []byte) error {
+func (p *SettingsParameter) Deserialize(input []byte) error {
 	p.Identifier = binary.BigEndian.Uint16(input[0:2])
 	p.Value = binary.BigEndian.Uint32(input[2:6])
 	return nil
 }
 
-func (p *SettingsPayload) Size() int {
+func (p *SettingsParameter) Size() int {
 	return 6
+}
+
+func (p *SettingsPayload) Serialize() []byte {
+	var output []byte
+
+	for i := 0; i < len(p.Parameters); i++ {
+		output = append(output, p.Parameters[i].Serialize()...)
+	}
+
+	return output
+}
+
+func (p *SettingsPayload) Deserialize(input []byte) error {
+	p.Parameters = make([]SettingsParameter, 0)
+	for i := 0; i < len(input); {
+		var param SettingsParameter
+		param.Deserialize(input[i : i+param.Size()])
+		p.Parameters = append(p.Parameters, param)
+		i += param.Size()
+	}
+
+	return nil
 }
 
 type HeadersPayload struct {
@@ -207,15 +233,15 @@ func (p *DataPayload) Deserialize(input []byte) error {
 	return nil
 }
 
-type SettingsParameter uint16
+type SettingsParameterType uint16
 
 const (
-	SETTINGS_HEADER_TABLE_SIZE      SettingsParameter = 0x1
-	SETTINGS_ENABLE_PUSH            SettingsParameter = 0x2
-	SETTINGS_MAX_CONCURRENT_STREAMS SettingsParameter = 0x3
-	SETTINGS_INITIAL_WINDOW_SIZE    SettingsParameter = 0x4
-	SETTINGS_MAX_FRAME_SIZE         SettingsParameter = 0x5
-	SETTINGS_MAX_HEADER_LIST_SIZE   SettingsParameter = 0x6
+	SETTINGS_HEADER_TABLE_SIZE      SettingsParameterType = 0x1
+	SETTINGS_ENABLE_PUSH            SettingsParameterType = 0x2
+	SETTINGS_MAX_CONCURRENT_STREAMS SettingsParameterType = 0x3
+	SETTINGS_INITIAL_WINDOW_SIZE    SettingsParameterType = 0x4
+	SETTINGS_MAX_FRAME_SIZE         SettingsParameterType = 0x5
+	SETTINGS_MAX_HEADER_LIST_SIZE   SettingsParameterType = 0x6
 )
 
 type FixedLengthSerializable interface {
@@ -327,7 +353,7 @@ type RstStreamFrame struct {
 
 type SettingsFrame struct {
 	FrameBase
-	Payload []SettingsPayload
+	Payload SettingsPayload
 }
 
 type PushPromisePayload struct {
@@ -474,13 +500,9 @@ func ReadFrame(reader io.Reader) (Frame, error) {
 		var frame SettingsFrame
 		frame.Header = header
 
-		for i := 0; i < int(frame.Header.Length); {
-			var p SettingsPayload
-			p.Deserialize(buf[i : i+p.Size()])
-			frame.Payload = append(frame.Payload, p)
-			i += p.Size()
+		if err := frame.Payload.Deserialize(buf); err != nil {
+			return nil, err
 		}
-
 		return &frame, nil
 
 	case PUSH_PROMISE:
