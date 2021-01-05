@@ -267,15 +267,15 @@ func WriteTo(w io.Writer, s FixedLengthSerializable) (int64, error) {
 }
 
 type Frame interface {
-	// GetType() FrameType
+	GetHeader() *FrameHeader
 }
 
 type FrameBase struct {
 	Header FrameHeader
 }
 
-func (f *FrameBase) GetType() FrameType {
-	return f.Header.Type
+func (f *FrameBase) GetHeader() *FrameHeader {
+	return &f.Header
 }
 
 type DataFrame struct {
