@@ -9,13 +9,14 @@ import (
 )
 
 type Connection struct {
-	Streams      map[uint32]Stream
-	Conn         *net.Conn
-	Tls          *tls.Conn
-	Reader       *bufio.Reader
-	Writer       *bufio.Writer
-	scheme       string
-	nextStreamID uint32
+	Streams       map[uint32]Stream
+	Conn          *net.Conn
+	Tls           *tls.Conn
+	Reader        *bufio.Reader
+	Writer        *bufio.Writer
+	scheme        string
+	nextStreamID  uint32
+	HeaderDecoder HeaderDecoder
 }
 
 func Dial(address string) (*Connection, error) {
@@ -30,6 +31,10 @@ func Dial(address string) (*Connection, error) {
 	c.Writer = bufio.NewWriter(conn)
 	c.scheme = "http"
 	c.nextStreamID = 1
+	c.HeaderDecoder = HeaderDecoder{
+		DynamicTable: []HeaderField{},
+		MaxSize:      4096,
+	}
 	return &c, nil
 }
 
@@ -49,6 +54,10 @@ func DialTls(address string) (*Connection, error) {
 	c.Writer = bufio.NewWriter(conn)
 	c.scheme = "https"
 	c.nextStreamID = 1
+	c.HeaderDecoder = HeaderDecoder{
+		DynamicTable: []HeaderField{},
+		MaxSize:      4096,
+	}
 	return &c, nil
 }
 
@@ -171,19 +180,7 @@ func (c *Connection) Request(method string, requestPath string, headers []Header
 	response := Response{}
 
 	if f, ok := (<-c.Streams[sid].recv).(*HeadersFrame); ok {
-		hl := ParseHeaderField(f.Payload.HeaderBlockFragment)
-
-		response.Header = make(map[string][]string)
-		for i := 0; i < len(hl); i++ {
-			if hl[i].representationType != DYNAMIC_TABLE_SIZE_UPDATE {
-				if v, ok := response.Header[hl[i].Name]; ok {
-					response.Header[hl[i].Name] = append(v, hl[i].Value)
-				} else {
-					response.Header[hl[i].Name] = []string{hl[i].Value}
-				}
-			}
-		}
-		fmt.Printf("Headers: %#v\n", hl)
+		response.Header = c.HeaderDecoder.Decode(f.Payload.HeaderBlockFragment)
 	}
 
 	if d, ok := (<-c.Streams[sid].recv).(*DataFrame); ok {
