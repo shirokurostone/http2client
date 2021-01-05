@@ -100,7 +100,7 @@ func (c *Connection) StartHTTP2() {
 
 	header := FrameHeader{
 		Length:           0,
-		Type:             SETTINGS,
+		Type:             FrameTypeSettings,
 		Flags:            0,
 		StreamIdentifier: 0,
 	}
@@ -114,8 +114,8 @@ func (c *Connection) StartHTTP2() {
 
 	header = FrameHeader{
 		Length:           0,
-		Type:             SETTINGS,
-		Flags:            ACK,
+		Type:             FrameTypeSettings,
+		Flags:            FlagsAck,
 		StreamIdentifier: 0,
 	}
 
@@ -167,8 +167,8 @@ func (c *Connection) Request(method string, requestPath string, headers []Header
 
 	header := FrameHeader{
 		Length:           uint32(len(hpData)),
-		Type:             HEADERS,
-		Flags:            END_STREAM | END_HEADERS,
+		Type:             FrameTypeHeaders,
+		Flags:            FlagsEndStream | FlagsEndHeaders,
 		StreamIdentifier: sid,
 	}
 

@@ -10,26 +10,26 @@ const HTTP2CoccectionPreface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
 type FrameType uint8
 
 const (
-	DATA          FrameType = 0x00
-	HEADERS       FrameType = 0x01
-	PRIORITY      FrameType = 0x02
-	RST_STREAM    FrameType = 0x03
-	SETTINGS      FrameType = 0x04
-	PUSH_PROMISE  FrameType = 0x05
-	PING          FrameType = 0x06
-	GOAWAY        FrameType = 0x07
-	WINDOW_UPDATE FrameType = 0x08
-	CONTINUATION  FrameType = 0x09
+	FrameTypeData         FrameType = 0x00
+	FrameTypeHeaders      FrameType = 0x01
+	FrameTypePriority     FrameType = 0x02
+	FrameTypeRstStream    FrameType = 0x03
+	FrameTypeSettings     FrameType = 0x04
+	FrameTypePushPromise  FrameType = 0x05
+	FrameTypePing         FrameType = 0x06
+	FrameTypeGoaway       FrameType = 0x07
+	FrameTypeWindowUpdate FrameType = 0x08
+	FrameTypeContinuation FrameType = 0x09
 )
 
 type Flags uint8
 
 const (
-	ACK            Flags = 0x01
-	END_STREAM     Flags = 0x01
-	END_HEADERS    Flags = 0x04
-	PADDED         Flags = 0x08
-	FLAGS_PRIORITY Flags = 0x20
+	FlagsAck           Flags = 0x01
+	FlagsEndStream     Flags = 0x01
+	FlagsEndHeaders    Flags = 0x04
+	FlagsPadded        Flags = 0x08
+	FlagsFlagsPriority Flags = 0x20
 )
 
 func (self Flags) Has(f Flags) bool {
@@ -185,20 +185,20 @@ func (p *GoawayPayload) Deserialize(input []byte) error {
 type ErrorCode uint32
 
 const (
-	NO_ERROR            ErrorCode = 0x00
-	PROTOCOL_ERROR      ErrorCode = 0x01
-	INTERNAL_ERROR      ErrorCode = 0x02
-	FLOW_CONTROL_ERROR  ErrorCode = 0x03
-	SETTINGS_TIMEOUT    ErrorCode = 0x04
-	STREAM_CLOSED       ErrorCode = 0x05
-	FRAME_SIZE_ERROR    ErrorCode = 0x06
-	REFUSED_STREAM      ErrorCode = 0x07
-	CANCEL              ErrorCode = 0x08
-	COMPRESSION_ERROR   ErrorCode = 0x09
-	CONNECT_ERROR       ErrorCode = 0x0a
-	ENHANCE_YOUR_CALM   ErrorCode = 0x0b
-	INADEQUATE_SECURITY ErrorCode = 0x0c
-	HTTP_1_1_REQUIRED   ErrorCode = 0x0d
+	ErrorCodeNoError            ErrorCode = 0x00
+	ErrorCodeProtocolError      ErrorCode = 0x01
+	ErrorCodeInternalError      ErrorCode = 0x02
+	ErrorCodeFlowControlError   ErrorCode = 0x03
+	ErrorCodeSettingsTimeout    ErrorCode = 0x04
+	ErrorCodeStreamClosed       ErrorCode = 0x05
+	ErrorCodeFrameSizeError     ErrorCode = 0x06
+	ErrorCodeRefusedStream      ErrorCode = 0x07
+	ErrorCodeCancel             ErrorCode = 0x08
+	ErrorCodeCompressionError   ErrorCode = 0x09
+	ErrorCodeConnectError       ErrorCode = 0x0a
+	ErrorCodeEnhanceYourCalm    ErrorCode = 0x0b
+	ErrorCodeInadequateSecurity ErrorCode = 0x0c
+	ErrorCodeHTTP11Required     ErrorCode = 0x0d
 )
 
 type WindowUpdatePayload struct {
@@ -236,12 +236,12 @@ func (p *DataPayload) Deserialize(input []byte) error {
 type SettingsParameterType uint16
 
 const (
-	SETTINGS_HEADER_TABLE_SIZE      SettingsParameterType = 0x1
-	SETTINGS_ENABLE_PUSH            SettingsParameterType = 0x2
-	SETTINGS_MAX_CONCURRENT_STREAMS SettingsParameterType = 0x3
-	SETTINGS_INITIAL_WINDOW_SIZE    SettingsParameterType = 0x4
-	SETTINGS_MAX_FRAME_SIZE         SettingsParameterType = 0x5
-	SETTINGS_MAX_HEADER_LIST_SIZE   SettingsParameterType = 0x6
+	SettingsHeaderTableSize      SettingsParameterType = 0x1
+	SettingsEnablePush           SettingsParameterType = 0x2
+	SettingsMaxConcurrentStreams SettingsParameterType = 0x3
+	SettingsInitialWindowSize    SettingsParameterType = 0x4
+	SettingsMaxFrameSize         SettingsParameterType = 0x5
+	SettingsMaxHeaderListSize    SettingsParameterType = 0x6
 )
 
 type FixedLengthSerializable interface {
@@ -460,7 +460,7 @@ func ReadFrame(reader io.Reader) (Frame, error) {
 	}
 
 	switch header.Type {
-	case DATA:
+	case FrameTypeData:
 		var frame DataFrame
 		frame.Header = header
 
@@ -469,16 +469,16 @@ func ReadFrame(reader io.Reader) (Frame, error) {
 		}
 		return &frame, nil
 
-	case HEADERS:
+	case FrameTypeHeaders:
 		var frame HeadersFrame
 		frame.Header = header
 
-		if err := frame.Payload.Deserialize(buf, header.Flags.Has(PADDED), header.Flags.Has(FLAGS_PRIORITY)); err != nil {
+		if err := frame.Payload.Deserialize(buf, header.Flags.Has(FlagsPadded), header.Flags.Has(FlagsFlagsPriority)); err != nil {
 			return nil, err
 		}
 		return &frame, nil
 
-	case PRIORITY:
+	case FrameTypePriority:
 		var frame PriorityFrame
 		frame.Header = header
 
@@ -487,7 +487,7 @@ func ReadFrame(reader io.Reader) (Frame, error) {
 		}
 		return &frame, nil
 
-	case RST_STREAM:
+	case FrameTypeRstStream:
 		var frame RstStreamFrame
 		frame.Header = header
 
@@ -496,7 +496,7 @@ func ReadFrame(reader io.Reader) (Frame, error) {
 		}
 		return &frame, nil
 
-	case SETTINGS:
+	case FrameTypeSettings:
 		var frame SettingsFrame
 		frame.Header = header
 
@@ -505,16 +505,16 @@ func ReadFrame(reader io.Reader) (Frame, error) {
 		}
 		return &frame, nil
 
-	case PUSH_PROMISE:
+	case FrameTypePushPromise:
 		var frame PushPromiseFrame
 		frame.Header = header
 
-		if err := frame.Payload.Deserialize(buf, header.Flags.Has(PADDED)); err != nil {
+		if err := frame.Payload.Deserialize(buf, header.Flags.Has(FlagsPadded)); err != nil {
 			return nil, err
 		}
 		return &frame, nil
 
-	case PING:
+	case FrameTypePing:
 		var frame PingFrame
 		frame.Header = header
 
@@ -523,7 +523,7 @@ func ReadFrame(reader io.Reader) (Frame, error) {
 		}
 		return &frame, nil
 
-	case GOAWAY:
+	case FrameTypeGoaway:
 		var frame GoawayFrame
 		frame.Header = header
 
@@ -532,7 +532,7 @@ func ReadFrame(reader io.Reader) (Frame, error) {
 		}
 		return &frame, nil
 
-	case WINDOW_UPDATE:
+	case FrameTypeWindowUpdate:
 		var frame WindowUpdateFrame
 		frame.Header = header
 
@@ -541,7 +541,7 @@ func ReadFrame(reader io.Reader) (Frame, error) {
 		}
 		return &frame, nil
 
-	case CONTINUATION:
+	case FrameTypeContinuation:
 		var frame ContinuationFrame
 		frame.Header = header
 

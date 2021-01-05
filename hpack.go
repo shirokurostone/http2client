@@ -119,7 +119,7 @@ func EncodeHeaders(hl HeaderList) ([]byte, error) {
 		}
 		for j := 1; j < len(StaticTable); j++ {
 			if strings.Compare(h.Name, StaticTable[j].Name) == 0 {
-				d, err := h.DumpLiteralHeaderFieldWithIndexedName(j, WITHOUT_INDEXING)
+				d, err := h.DumpLiteralHeaderFieldWithIndexedName(j, IndexingWithout)
 				if err != nil {
 					return nil, err
 				}
@@ -132,7 +132,7 @@ func EncodeHeaders(hl HeaderList) ([]byte, error) {
 			continue
 		}
 
-		d, err := h.DumpLiteralHeaderFieldWithNewdName(WITHOUT_INDEXING)
+		d, err := h.DumpLiteralHeaderFieldWithNewdName(IndexingWithout)
 		if err != nil {
 			return nil, err
 		}
@@ -145,7 +145,7 @@ func EncodeHeaders(hl HeaderList) ([]byte, error) {
 
 func (d *HeaderDecoder) parseIndexedName(index int, input []byte, indexingType indexingType) (HeaderFieldFormat, int) {
 	var result HeaderFieldFormat
-	result.representationType = LITERAL_HEADER_FIELD
+	result.representationType = LiteralHeaderField
 	result.indexingType = indexingType
 
 	result.tableIndex = index
@@ -173,7 +173,7 @@ func (d *HeaderDecoder) parseIndexedName(index int, input []byte, indexingType i
 
 func (d *HeaderDecoder) parseNewName(input []byte, indexingType indexingType) (HeaderFieldFormat, int) {
 	var result HeaderFieldFormat
-	result.representationType = LITERAL_HEADER_FIELD
+	result.representationType = LiteralHeaderField
 	result.indexingType = indexingType
 
 	i := 0
@@ -219,7 +219,7 @@ func (d *HeaderDecoder) parseHeaderBlockFragment(input []byte) []HeaderFieldForm
 			}
 
 			f := HeaderFieldFormat{
-				representationType: INDEX_HEADER_FIELD,
+				representationType: IndexHeaderField,
 				tableIndex:         index,
 				HeaderField:        *field,
 			}
@@ -232,7 +232,7 @@ func (d *HeaderDecoder) parseHeaderBlockFragment(input []byte) []HeaderFieldForm
 			if b == 0x40 {
 				// New Name
 				i++
-				f, j := d.parseNewName(input[i:], INCREMENTAL_INDEXING)
+				f, j := d.parseNewName(input[i:], IndexingIncremental)
 				result = append(result, f)
 				d.insertIntoDynamicTable(HeaderField{f.Name, f.Value})
 				i += j
@@ -240,7 +240,7 @@ func (d *HeaderDecoder) parseHeaderBlockFragment(input []byte) []HeaderFieldForm
 				// Indexed Name
 				index, k := DecodeInteger(input[i:], 6)
 				i += k
-				f, j := d.parseIndexedName(index, input[i:], INCREMENTAL_INDEXING)
+				f, j := d.parseIndexedName(index, input[i:], IndexingIncremental)
 				result = append(result, f)
 				d.insertIntoDynamicTable(HeaderField{f.Name, f.Value})
 				i += j
@@ -251,14 +251,14 @@ func (d *HeaderDecoder) parseHeaderBlockFragment(input []byte) []HeaderFieldForm
 			if b == 0x00 {
 				// New Name
 				i++
-				f, j := d.parseNewName(input[i:], WITHOUT_INDEXING)
+				f, j := d.parseNewName(input[i:], IndexingWithout)
 				result = append(result, f)
 				i += j
 			} else {
 				// Indexed Name
 				index, k := DecodeInteger(input[i:], 4)
 				i += k
-				f, j := d.parseIndexedName(index, input[i:], WITHOUT_INDEXING)
+				f, j := d.parseIndexedName(index, input[i:], IndexingWithout)
 				result = append(result, f)
 				i += j
 			}
@@ -268,14 +268,14 @@ func (d *HeaderDecoder) parseHeaderBlockFragment(input []byte) []HeaderFieldForm
 			if b == 0x10 {
 				// New Name
 				i++
-				f, j := d.parseNewName(input[i:], NEVER_INDEXING)
+				f, j := d.parseNewName(input[i:], IndexingNever)
 				result = append(result, f)
 				i += j
 			} else {
 				// Indexed Name
 				index, k := DecodeInteger(input[i:], 4)
 				i += k
-				f, j := d.parseIndexedName(index, input[i:], NEVER_INDEXING)
+				f, j := d.parseIndexedName(index, input[i:], IndexingNever)
 				result = append(result, f)
 				i += j
 			}
@@ -285,7 +285,7 @@ func (d *HeaderDecoder) parseHeaderBlockFragment(input []byte) []HeaderFieldForm
 			max, k := DecodeInteger(input[i:], 5)
 			i += k
 			f := HeaderFieldFormat{
-				representationType: DYNAMIC_TABLE_SIZE_UPDATE,
+				representationType: DynamicTableSizeUpdate,
 				MaxSize:            max,
 			}
 			result = append(result, f)
@@ -327,29 +327,29 @@ type HeaderFieldFormat struct {
 }
 
 const (
-	INDEX_HEADER_FIELD representationType = iota
-	LITERAL_HEADER_FIELD
-	DYNAMIC_TABLE_SIZE_UPDATE
+	IndexHeaderField representationType = iota
+	LiteralHeaderField
+	DynamicTableSizeUpdate
 )
 
 const (
-	INVALID_INDEXING indexingType = iota
-	INCREMENTAL_INDEXING
-	WITHOUT_INDEXING
-	NEVER_INDEXING
+	IndexingInvalid indexingType = iota
+	IndexingIncremental
+	IndexingWithout
+	IndexingNever
 )
 
 func (h *HeaderField) DumpLiteralHeaderFieldWithIndexedName(index int, indexingType indexingType) ([]byte, error) {
 	var result []byte
 	switch indexingType {
-	case INCREMENTAL_INDEXING:
+	case IndexingIncremental:
 		result = EncodeInteger(index, 6)
 		result[0] |= 0x40
 		break
-	case WITHOUT_INDEXING:
+	case IndexingWithout:
 		result = EncodeInteger(index, 4)
 		break
-	case NEVER_INDEXING:
+	case IndexingNever:
 		result = EncodeInteger(index, 4)
 		result[0] |= 0x10
 		break
@@ -369,13 +369,13 @@ var errIllegalArgument = errors.New("IllegalArgument")
 func (h *HeaderField) DumpLiteralHeaderFieldWithNewdName(indexingType indexingType) ([]byte, error) {
 	var result []byte
 	switch indexingType {
-	case INCREMENTAL_INDEXING:
+	case IndexingIncremental:
 		result = []byte{0x40}
 		break
-	case WITHOUT_INDEXING:
+	case IndexingWithout:
 		result = []byte{0x00}
 		break
-	case NEVER_INDEXING:
+	case IndexingNever:
 		result = []byte{0x10}
 		break
 	default:
@@ -402,7 +402,7 @@ func (d *HeaderDecoder) Decode(input []byte) map[string][]string {
 
 	headers := make(map[string][]string)
 	for i := 0; i < len(hl); i++ {
-		if hl[i].representationType != DYNAMIC_TABLE_SIZE_UPDATE {
+		if hl[i].representationType != DynamicTableSizeUpdate {
 			if v, ok := headers[hl[i].Name]; ok {
 				headers[hl[i].Name] = append(v, hl[i].Value)
 			} else {
