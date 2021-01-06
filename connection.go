@@ -98,29 +98,43 @@ func (c *Connection) StartHTTP2() {
 
 	}(c)
 
-	header := FrameHeader{
-		Length:           0,
-		Type:             FrameTypeSettings,
-		Flags:            0,
-		StreamIdentifier: 0,
+	sf1 := SettingsFrame{
+		FrameBase: FrameBase{
+			Header: FrameHeader{
+				Length:           0,
+				Type:             FrameTypeSettings,
+				Flags:            0,
+				StreamIdentifier: 0,
+			},
+		},
+		Payload: SettingsPayload{
+			Parameters: []SettingsParameter{},
+		},
 	}
 
-	fmt.Printf("Send: %#v\n", header)
-	c.Writer.Write(header.Serialize())
+	fmt.Printf("Send: %#v\n", sf1)
+	c.Writer.Write(sf1.Serialize())
 	c.Writer.Flush()
 
 	<-c.Streams[0].recv
 	<-c.Streams[0].recv
 
-	header = FrameHeader{
-		Length:           0,
-		Type:             FrameTypeSettings,
-		Flags:            FlagsAck,
-		StreamIdentifier: 0,
+	sf2 := SettingsFrame{
+		FrameBase: FrameBase{
+			Header: FrameHeader{
+				Length:           0,
+				Type:             FrameTypeSettings,
+				Flags:            FlagsAck,
+				StreamIdentifier: 0,
+			},
+		},
+		Payload: SettingsPayload{
+			Parameters: []SettingsParameter{},
+		},
 	}
 
-	fmt.Printf("Send: %#v\n", header)
-	c.Writer.Write(header.Serialize())
+	fmt.Printf("Send: %#v\n", sf2)
+	c.Writer.Write(sf2.Serialize())
 	c.Writer.Flush()
 
 	<-c.Streams[0].recv
@@ -156,25 +170,27 @@ func (c *Connection) Request(method string, requestPath string, headers []Header
 		return nil, err
 	}
 
-	hp := HeadersPayload{
-		PadLength:           0,
-		E:                   0,
-		StreamDependency:    0,
-		Weight:              0,
-		HeaderBlockFragment: hl,
+	hf := HeadersFrame{
+		FrameBase: FrameBase{
+			Header: FrameHeader{
+				Length:           0,
+				Type:             FrameTypeHeaders,
+				Flags:            FlagsEndStream | FlagsEndHeaders,
+				StreamIdentifier: sid,
+			},
+		},
+		Payload: HeadersPayload{
+			PadLength:           0,
+			E:                   0,
+			StreamDependency:    0,
+			Weight:              0,
+			HeaderBlockFragment: hl,
+		},
 	}
-	hpData := hp.Serialize()
+	hf.Header.Length = uint32(len(hf.Payload.Serialize()))
 
-	header := FrameHeader{
-		Length:           uint32(len(hpData)),
-		Type:             FrameTypeHeaders,
-		Flags:            FlagsEndStream | FlagsEndHeaders,
-		StreamIdentifier: sid,
-	}
-
-	fmt.Printf("Send: %#v %#v\n", header, hpData)
-	c.Writer.Write(header.Serialize())
-	c.Writer.Write(hpData)
+	fmt.Printf("Send: %#v\n", hf)
+	c.Writer.Write(hf.Serialize())
 	c.Writer.Flush()
 
 	response := Response{}
