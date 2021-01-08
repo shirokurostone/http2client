@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log"
+	"math"
 	"net"
 )
 
@@ -17,6 +18,14 @@ type Connection struct {
 	scheme        string
 	nextStreamID  uint32
 	HeaderDecoder HeaderDecoder
+
+	EnablePush           bool
+	MaxConcurrentStreams uint32
+	InitialWindowSize    uint32
+	MaxFrameSize         uint32
+	MaxHeaderListSize    uint32
+
+	Window uint32
 }
 
 func Dial(address string) (*Connection, error) {
@@ -35,6 +44,13 @@ func Dial(address string) (*Connection, error) {
 		DynamicTable: []HeaderField{},
 		MaxSize:      4096,
 	}
+	c.EnablePush = true
+	c.MaxConcurrentStreams = math.MaxUint32
+	c.InitialWindowSize = 65535
+	c.MaxFrameSize = 16384
+	c.MaxHeaderListSize = math.MaxUint32
+
+	c.Window = c.InitialWindowSize
 	return &c, nil
 }
 
@@ -58,6 +74,13 @@ func DialTls(address string) (*Connection, error) {
 		DynamicTable: []HeaderField{},
 		MaxSize:      4096,
 	}
+	c.EnablePush = true
+	c.MaxConcurrentStreams = math.MaxUint32
+	c.InitialWindowSize = 65535
+	c.MaxFrameSize = 16384
+	c.MaxHeaderListSize = math.MaxUint32
+
+	c.Window = c.InitialWindowSize
 	return &c, nil
 }
 
@@ -91,6 +114,29 @@ func (c *Connection) StartHTTP2() {
 			fmt.Printf("Recv: %#v\n", frame)
 			header := frame.GetHeader()
 
+			if d, ok := frame.(*DataFrame); ok {
+				c.Window -= d.Header.Length
+				if c.Window <= 0 {
+					wf := WindowUpdateFrame{
+						FrameBase: FrameBase{
+							Header: FrameHeader{
+								Length:           4,
+								Type:             FrameTypeWindowUpdate,
+								Flags:            0,
+								StreamIdentifier: 0,
+							},
+						},
+						Payload: WindowUpdatePayload{
+							WindowSizeIncrement: c.InitialWindowSize,
+						},
+					}
+					fmt.Printf("Send: %#v\n", wf)
+					c.Writer.Write(wf.Serialize())
+					c.Writer.Flush()
+					c.Window += c.InitialWindowSize
+				}
+			}
+
 			if stream, ok := c.Streams[header.StreamIdentifier]; ok {
 				stream.recv <- frame
 			}
@@ -116,28 +162,71 @@ func (c *Connection) StartHTTP2() {
 	c.Writer.Write(sf1.Serialize())
 	c.Writer.Flush()
 
-	<-c.Streams[0].recv
-	<-c.Streams[0].recv
+	go func(c *Connection) {
+		sid := uint32(0)
 
-	sf2 := SettingsFrame{
-		FrameBase: FrameBase{
-			Header: FrameHeader{
-				Length:           0,
-				Type:             FrameTypeSettings,
-				Flags:            FlagsAck,
-				StreamIdentifier: 0,
-			},
-		},
-		Payload: SettingsPayload{
-			Parameters: []SettingsParameter{},
-		},
-	}
+		for {
+			frame := <-c.Streams[sid].recv
+			if s, ok := frame.(*SettingsFrame); ok {
+				if !s.Header.Flags.Has(FlagsAck) {
 
-	fmt.Printf("Send: %#v\n", sf2)
-	c.Writer.Write(sf2.Serialize())
-	c.Writer.Flush()
+					for _, p := range s.Payload.Parameters {
+						switch p.Identifier {
+						case SettingsHeaderTableSize:
+							c.HeaderDecoder.MaxSize = int(p.Value)
+							break
+						case SettingsEnablePush:
+							if p.Value == 0 {
+								c.EnablePush = false
+							} else if p.Value == 1 {
+								c.EnablePush = true
+							} else {
+								// error
+							}
+							break
+						case SettingsMaxConcurrentStreams:
+							c.MaxConcurrentStreams = p.Value
+							break
+						case SettingsInitialWindowSize:
+							c.InitialWindowSize = p.Value
+							break
+						case SettingsMaxFrameSize:
+							if 16384 <= p.Value && p.Value <= 16777215 {
+								c.MaxFrameSize = p.Value
+							} else {
+								// error
+							}
+							break
+						case SettingsMaxHeaderListSize:
+							c.MaxHeaderListSize = p.Value
+							break
+						default:
+							// error
+						}
 
-	<-c.Streams[0].recv
+					}
+
+					sf := SettingsFrame{
+						FrameBase: FrameBase{
+							Header: FrameHeader{
+								Length:           0,
+								Type:             FrameTypeSettings,
+								Flags:            FlagsAck,
+								StreamIdentifier: 0,
+							},
+						},
+						Payload: SettingsPayload{
+							Parameters: []SettingsParameter{},
+						},
+					}
+					fmt.Printf("Send: %#v\n", sf)
+					c.Writer.Write(sf.Serialize())
+					c.Writer.Flush()
+				}
+			}
+		}
+	}(c)
+
 }
 
 type Response struct {
@@ -193,16 +282,67 @@ func (c *Connection) Request(method string, requestPath string, headers []Header
 	c.Writer.Write(hf.Serialize())
 	c.Writer.Flush()
 
-	response := Response{}
+	response := Response{
+		Header: make(map[string][]string),
+		Body:   "",
+	}
+	readingHeader := true
+	headerBlockFragment := []byte{}
+	window := c.InitialWindowSize
 
-	if f, ok := (<-c.Streams[sid].recv).(*HeadersFrame); ok {
-		response.Header = c.HeaderDecoder.Decode(f.Payload.HeaderBlockFragment)
+	for {
+		frame := <-c.Streams[sid].recv
+
+		if readingHeader {
+			if f, ok := frame.(*HeadersFrame); ok {
+				headerBlockFragment = append(headerBlockFragment, f.Payload.HeaderBlockFragment...)
+			} else if c, ok := frame.(*ContinuationFrame); ok {
+				headerBlockFragment = append(headerBlockFragment, c.Payload.HeaderBlockFragment...)
+			} else {
+				// frame error
+			}
+		} else {
+			if d, ok := frame.(*DataFrame); ok {
+				window -= d.Header.Length
+				response.Body = response.Body + string(d.Payload.Data)
+			} else {
+				// frame error
+			}
+		}
+
+		if frame.GetHeader().Flags.Has(FlagsEndHeaders) {
+			readingHeader = false
+			header := c.HeaderDecoder.Decode(headerBlockFragment)
+			for key, value := range header {
+				if _, ok := response.Header[key]; ok {
+					response.Header[key] = append(response.Header[key], value...)
+				} else {
+					response.Header[key] = value
+				}
+			}
+		} else if frame.GetHeader().Flags.Has(FlagsEndStream) {
+			break
+		} else if window <= 0 {
+			wf := WindowUpdateFrame{
+				FrameBase: FrameBase{
+					Header: FrameHeader{
+						Length:           4,
+						Type:             FrameTypeWindowUpdate,
+						Flags:            0,
+						StreamIdentifier: sid,
+					},
+				},
+				Payload: WindowUpdatePayload{
+					WindowSizeIncrement: c.InitialWindowSize,
+				},
+			}
+			fmt.Printf("Send: %#v\n", wf)
+			c.Writer.Write(wf.Serialize())
+			c.Writer.Flush()
+			window += c.InitialWindowSize
+		}
 	}
 
-	if d, ok := (<-c.Streams[sid].recv).(*DataFrame); ok {
-		response.Body = string(d.Payload.Data)
-		fmt.Printf("Body:\n%s", response.Body)
-	}
 	return &response, nil
 }
 

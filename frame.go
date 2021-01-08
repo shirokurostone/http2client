@@ -316,7 +316,7 @@ func (frame *SettingsFrame) Deserialize(header []byte, payload []byte) error {
 }
 
 type SettingsParameter struct {
-	Identifier uint16
+	Identifier SettingsParameterType
 	Value      uint32
 }
 
@@ -328,7 +328,7 @@ func (p *SettingsParameter) Serialize() []byte {
 	var output [6]byte
 	var tmp [4]byte
 
-	binary.BigEndian.PutUint16(tmp[0:2], p.Identifier)
+	binary.BigEndian.PutUint16(tmp[0:2], uint16(p.Identifier))
 	copy(output[0:2], tmp[0:2])
 	binary.BigEndian.PutUint32(tmp[0:4], p.Value)
 	copy(output[2:6], tmp[0:4])
@@ -337,7 +337,7 @@ func (p *SettingsParameter) Serialize() []byte {
 }
 
 func (p *SettingsParameter) Deserialize(input []byte) error {
-	p.Identifier = binary.BigEndian.Uint16(input[0:2])
+	p.Identifier = SettingsParameterType(binary.BigEndian.Uint16(input[0:2]))
 	p.Value = binary.BigEndian.Uint32(input[2:6])
 	return nil
 }
